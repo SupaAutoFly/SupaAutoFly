@@ -355,18 +355,18 @@ function makeMetadata(prefix: string): Metadata {
         TARGETS: dedent`{
           "primary": {
             "endpoint": "${process.env.STORAGE_BACKUP_S3_ENDPOINT}",
-            "path": "${process.env.STORAGE_BACKUP_S3_BUCKET}:${
-          process.env.STORAGE_BACKUP_S3_PATH || "/"
+            "path": "${process.env.STORAGE_BACKUP_S3_BUCKET}/${
+          process.env.STORAGE_BACKUP_S3_PATH || ""
         }",
-            "prune": "${process.env.STORAGE_BACKUP_PRUNE}",
+            "forget": "${process.env.STORAGE_BACKUP_RETENTION}",
             "compression": "${
-              process.env.STORAGE_BACKUP_COMPRESSION || "auto,zstd,22"
-            }",
-            "encryption": "${
-              process.env.STORAGE_BACKUP_ENCRYPTION || "repokey-blake2"
+              process.env.STORAGE_BACKUP_COMPRESSION || "auto"
             }"
           }
         }`,
+        RESTIC_READ_CONCURRENCY: "10",
+        RESTIC_RETRY_LOCK: "10m",
+        TIGRISFS_EXTRA_ARGS: "--disable-xattr"
       },
       secrets: {
         SOURCE_ACCESS_KEY_ID: "${STORAGE_AWS_ACCESS_KEY_ID}",
@@ -376,7 +376,7 @@ function makeMetadata(prefix: string): Metadata {
           "primary": {
             "access_key_id": "${process.env.STORAGE_BACKUP_S3_ACCESS_KEY_ID}",
             "secret_access_key": "${process.env.STORAGE_BACKUP_S3_SECRET_ACCESS_KEY}",
-            "borg_passphrase": "${process.env.STORAGE_BACKUP_PASSPHRASE}"
+            "passphrase": "${process.env.STORAGE_BACKUP_PASSPHRASE}"
           }
         }`,
       },
@@ -384,6 +384,16 @@ function makeMetadata(prefix: string): Metadata {
         backup: {
           cmd: "/usr/local/bin/backup.py",
           mode: processRunMode(process.env.STORAGE_BACKUP_SCHEDULE) || "stop",
+          needsVolume: true,
+        },
+        prune: {
+          cmd: "/usr/local/bin/backup.py prune",
+          mode: processRunMode(process.env.STORAGE_BACKUP_PRUNE_SCHEDULE) || "stop",
+          needsVolume: true,
+        },
+        check: {
+          cmd: "/usr/local/bin/backup.py check",
+          mode: processRunMode(process.env.STORAGE_BACKUP_CHECK_SCHEDULE) || "stop",
           needsVolume: true,
         },
         maintenance: {
@@ -434,7 +444,7 @@ if (storageBackend === "minio") {
 if (process.env.STORAGE_BACKUP_S3_ENDPOINT) {
   extraServices["storage-backup"] = {
     container_name: "storage-backup",
-    image: "ghcr.io/supaautofly/s3borgbackup:main",
+    image: "ghcr.io/supaautofly/s3resticbackup:main",
     depends_on: {
       // not really but the dependency solver needs a link to order things
       db: { condition: "service_healthy" },
