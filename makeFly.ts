@@ -42,7 +42,7 @@ type FlyConfig = {
   mounts: Array<{ destination: string; source: string }>;
   files: Array<{ guest_path: string; local_path: string }>;
   services: Array<any>;
-  vm: Record<string, any>;
+  vm: Array<Record<string, any>>;
   processes?: Record<string, string>;
   experimental?: {
     entrypoint?: string[];
@@ -533,10 +533,10 @@ function makeFly(inputContext: {
     mounts: [],
     files: [],
     services: [],
-    vm: {
+    vm: [{
       ...defaultVm,
       ...metadata?.vm,
-    },
+    }],
   };
 
   const context: Context = {
