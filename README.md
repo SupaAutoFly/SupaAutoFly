@@ -112,7 +112,7 @@ _Important:_ You will need to copy the new `.env` file to the SupaAutoFly root
 directory and run `./makeFly.ts` and `./fly/deploy-all.ts` again to update all
 dependent services with the new password as well!
 
-## Backups with Point-in-Time Recovery (PITR)
+## Postgres Backups with Point-in-Time Recovery (PITR)
 
 ### WAL-G Backup Configuration
 
@@ -179,7 +179,7 @@ guest_path = "/etc/maintenance_mode"
 13. Remove the maintenance mode `[[files]]` section from `fly.toml`
 14. `./deploy.ts` again to restart the app without maintenance mode.
 
-### Storage Backups (S3 → S3)
+## Storage Backups (S3 → S3)
 
 If you use supabase storage, you should also back up the storage data. As
 supabase storage uses Postgres only for metadata, the above Postgres backup will
