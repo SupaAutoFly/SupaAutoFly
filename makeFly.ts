@@ -413,7 +413,7 @@ const extraServices: Record<string, any> = {
     container_name: "fly-log-shipper",
     image: "flyio/log-shipper:latest",
     volumes: [
-      "./volumes/fly-log-shipper/debug.toml:/etc/vector/sinks/debug.toml",
+      // "./volumes/fly-log-shipper/debug.toml:/etc/vector/sinks/debug.toml",
       "./volumes/fly-log-shipper/supabase.toml:/etc/vector/sinks/supabase.toml",
     ],
     environment: {
