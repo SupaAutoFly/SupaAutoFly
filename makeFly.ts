@@ -15,7 +15,7 @@ import { sign, verify } from "jsonwebtoken";
 import { expandEnvVars } from "./expandEnvVars";
 
 const baseRepo = "https://github.com/supabase/supabase.git";
-const baseBranch = "1.25.04";
+const baseBranch = "1.25.12";
 
 const gitConfig = "-c advice.detachedHead=false -c core.autocrlf=input";
 
@@ -111,6 +111,7 @@ type ServiceMetadata = {
   preprocess?: ((context: InputContext) => void)[];
   extraDeployment?: ((context: Context) => string)[];
   extraContainerSetup?: string;
+  initialVolumeSize?: string;
 };
 
 type Metadata = {
@@ -154,14 +155,15 @@ function makeMetadata(prefix: string): Metadata {
         "./volumes/db/setup-backup.sh:/usr/local/bin/setup-backup.sh",
         "wal-g-logs:/var/log/wal-g",
       ],
+      initialVolumeSize: process.env.POSTGRES_INITIAL_VOLUME_SIZE || "4GB",
       extraContainerSetup: dedent`
-          if [ -n "\\$WALG_SSH_PRIVATE_KEY" ]; then
+          if [ -n "$WALG_SSH_PRIVATE_KEY" ]; then
             echo "Setting up SSH private key for WAL-G"
             mkdir -p ~postgres/.ssh
             export WALG_SSH_PRIVATE_KEY_PATH=$(echo ~postgres/.ssh/backup_id)
-            echo "\\$WALG_SSH_PRIVATE_KEY" > \\$WALG_SSH_PRIVATE_KEY_PATH
-            chmod 600 \\$WALG_SSH_PRIVATE_KEY_PATH
-            chown postgres:postgres \\$WALG_SSH_PRIVATE_KEY_PATH
+            echo "$WALG_SSH_PRIVATE_KEY" > $WALG_SSH_PRIVATE_KEY_PATH
+            chmod 600 $WALG_SSH_PRIVATE_KEY_PATH
+            chown postgres:postgres $WALG_SSH_PRIVATE_KEY_PATH
           fi
           echo "Creating ~postgres/.walg.json"
           bash /usr/local/bin/make-walg.json.sh > ~postgres/.walg.json
@@ -173,7 +175,7 @@ function makeMetadata(prefix: string): Metadata {
             echo "Maintenance mode is enabled, deferring database startup"
             sleep 60
           done
-          /usr/local/bin/setup-backup.sh "\\$@"
+          /usr/local/bin/setup-backup.sh "\$@"
           `,
     },
     auth: {
@@ -211,21 +213,22 @@ function makeMetadata(prefix: string): Metadata {
       },
     },
     analytics: {
-      ha: true,
+      ha: false,
       buildFromRepo: {
         repo: "https://github.com/tvogel/logflare.git",
-        branch: "v1.8.11-tv-1",
+        branch: "v1.26.13-tv-1",
+      },
+      vm: {
+        memory: "2GB",
       },
       env: {
         LOGFLARE_NODE_HOST: `${prefix}-analytics.fly.dev`,
-        LOGFLARE_API_KEY: undefined,
         LOGFLARE_LOG_LEVEL: "warn",
         PHX_HTTP_IP: "::",
         PHX_URL_HOST: `${prefix}-analytics.fly.dev`,
       },
       secrets: {
         POSTGRES_BACKEND_URL: true,
-        LOGFLARE_PUBLIC_ACCESS_TOKEN: "${LOGFLARE_API_KEY}",
       },
     },
     rest: {
@@ -277,10 +280,6 @@ function makeMetadata(prefix: string): Metadata {
     },
     realtime: {
       ha: false,
-      buildFromRepo: {
-        repo: "https://github.com/tvogel/realtime.git",
-        branch: "v2.30.34-tv-1",
-      },
       env: {
         ERL_AFLAGS: "-proto_dist inet6_tcp",
         SEED_SELF_HOST: 0,
@@ -332,13 +331,22 @@ function makeMetadata(prefix: string): Metadata {
       secrets: {
         ORG: org,
         ACCESS_TOKEN: "${FLY_LOG_SHIPPER_ACCESS_KEY}",
-        SUPABASE_LOGFLARE_API_KEY: "${LOGFLARE_API_KEY}",
+        LOGFLARE_PUBLIC_ACCESS_TOKEN: "${LOGFLARE_PUBLIC_ACCESS_TOKEN}",
       },
       preprocess: [makeFlyLogShipperConfig],
     },
     supavisor: {
       ha: false,
+      buildFromRepo: {
+        repo: "https://github.com/tvogel/supavisor.git",
+        branch: "v2.7.4-tv-1",
+      },
       rawPorts: ["${POSTGRES_PORT}", "${POOLER_PROXY_PORT_TRANSACTION}"],
+      env: {
+        "POSTGRES_HOST": "${POSTGRES_HOST}",
+        "SUPAVISOR_DB_IP_VERSION": "ipv6",
+      },
+      postprocess: [postprocessSupavisorConfig],
     },
     "storage-backup": {
       ha: false,
@@ -359,14 +367,12 @@ function makeMetadata(prefix: string): Metadata {
           process.env.STORAGE_BACKUP_S3_PATH || ""
         }",
             "forget": "${process.env.STORAGE_BACKUP_RETENTION}",
-            "compression": "${
-              process.env.STORAGE_BACKUP_COMPRESSION || "auto"
-            }"
+            "compression": "${process.env.STORAGE_BACKUP_COMPRESSION || "auto"}"
           }
         }`,
         RESTIC_READ_CONCURRENCY: "10",
         RESTIC_RETRY_LOCK: "10m",
-        TIGRISFS_EXTRA_ARGS: "--disable-xattr"
+        TIGRISFS_EXTRA_ARGS: "--disable-xattr",
       },
       secrets: {
         SOURCE_ACCESS_KEY_ID: "${STORAGE_AWS_ACCESS_KEY_ID}",
@@ -388,12 +394,14 @@ function makeMetadata(prefix: string): Metadata {
         },
         prune: {
           cmd: "/usr/local/bin/backup.py prune",
-          mode: processRunMode(process.env.STORAGE_BACKUP_PRUNE_SCHEDULE) || "stop",
+          mode:
+            processRunMode(process.env.STORAGE_BACKUP_PRUNE_SCHEDULE) || "stop",
           needsVolume: true,
         },
         check: {
           cmd: "/usr/local/bin/backup.py check",
-          mode: processRunMode(process.env.STORAGE_BACKUP_CHECK_SCHEDULE) || "stop",
+          mode:
+            processRunMode(process.env.STORAGE_BACKUP_CHECK_SCHEDULE) || "stop",
           needsVolume: true,
         },
         maintenance: {
@@ -533,10 +541,12 @@ function makeFly(inputContext: {
     mounts: [],
     files: [],
     services: [],
-    vm: [{
-      ...defaultVm,
-      ...metadata?.vm,
-    }],
+    vm: [
+      {
+        ...defaultVm,
+        ...metadata?.vm,
+      },
+    ],
   };
 
   const context: Context = {
@@ -574,7 +584,7 @@ function makeFly(inputContext: {
   }
 
   function guessSecret(key: string): boolean {
-    return !!key.match(/(pass|secret|key|database_url)/i);
+    return !!key.match(/(pass|secret|key|database_url|access_token)/i);
   }
 
   const guessedSecrets = Object.keys(composeData.environment || {}).filter(
@@ -943,6 +953,7 @@ function makeFly(inputContext: {
                 .join("\n")}
               `;
           }
+          return "";
         })()}
         ${(() => {
           if (metadata?.ip === "flycast")
@@ -1085,6 +1096,9 @@ function generateDockerfile(
     {
       destination: "/fly-data",
       source: toVolumeName(`${prefix}_${name}_data`),
+      ...(metadata?.initialVolumeSize && {
+        initial_size: metadata.initialVolumeSize,
+      }),
     },
   ];
   const newEntrypoint = entrypoint
@@ -1110,14 +1124,23 @@ function postprocessKongYml(context: { prefix: string; dir: string }) {
   });
 }
 
+function postprocessSupavisorConfig(context: { prefix: string; dir: string }) {
+  const { prefix, dir } = context;
+  replaceInFileSync({
+    files: `${dir}/volumes/pooler/pooler.exs`,
+    from: /  "db_host" => "db",/g,
+    to: `  "db_host" => System.get_env("POSTGRES_HOST"),`,
+  });
+}
+
 function makeFlyLogShipperConfig() {
-  const composeYaml = fs.readFileSync(
+  const vectorYaml = fs.readFileSync(
     "./supabase/docker/volumes/logs/vector.yml",
     "utf8"
   );
-  const composeData = parse(composeYaml);
+  const vectorData = parse(vectorYaml);
 
-  const transforms = { ...composeData.transforms };
+  const transforms = { ...vectorData.transforms };
   transforms.project_logs.inputs = ["log_json"];
   transforms.project_logs.source = transforms.project_logs.source.replace(
     ".container_name",
@@ -1132,14 +1155,14 @@ function makeFlyLogShipperConfig() {
     )
   );
   const sinks = Object.fromEntries(
-    Object.entries(composeData.sinks).map(
+    Object.entries(vectorData.sinks).map(
       ([sinkName, sinkDefinition]: [string, any]) => [
         sinkName,
         {
           ...sinkDefinition,
           auth: {
             strategy: "bearer",
-            token: "${SUPABASE_LOGFLARE_API_KEY}",
+            token: "${LOGFLARE_PUBLIC_ACCESS_TOKEN}",
           },
           uri: sinkDefinition.uri
             .replace(/.*\/api\/logs/, "${SUPABASE_LOGFLARE_URL}")
@@ -1156,17 +1179,22 @@ function makeFlyLogShipperConfig() {
           .metadata.host = .project
         }\n
         `;
-
-  const flyConfig = {
+  // see https://github.com/supabase/supabase/pull/41800
+  transforms.db_logs.source = transforms.db_logs.source.replace(
+    "if parsed != null {",
+    "if parsed.level != null {"
+  );
+  const flyLogShipperConfig = {
     transforms,
     sinks,
   };
   fs.mkdirSync("./supabase/docker/volumes/fly-log-shipper", {
     recursive: true,
   });
+  // escape backslashes for fly-log-shipper's variable expansion transformation
   fs.writeFileSync(
     "./supabase/docker/volumes/fly-log-shipper/supabase.toml",
-    stringify(flyConfig).replaceAll("\\", "\\\\") + "\n"
+    stringify(flyLogShipperConfig).replaceAll("\\", "\\\\") + "\n"
   );
 }
 
@@ -1404,6 +1432,7 @@ async function main() {
 
   // "recursive: true" to ignore error if already exists
   fs.mkdirSync(flyDir, { recursive: true });
+  fs.copyFileSync("./.env", `${flyDir}/.env`);
 
   for (const serviceName in composeData.services) {
     if (serviceName in substitutedServices) {
@@ -1517,7 +1546,6 @@ async function main() {
   fs.closeSync(destroyAllTs);
   fs.chmodSync(`${flyDir}/destroy-all.ts`, 0o755);
 
-  fs.copyFileSync("./.env", `${flyDir}/.env`);
   fs.copyFileSync("./passwdDb.ts", `${flyDir}/passwdDb.ts`);
 }
 
