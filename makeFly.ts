@@ -1546,6 +1546,7 @@ async function main() {
   fs.closeSync(destroyAllTs);
   fs.chmodSync(`${flyDir}/destroy-all.ts`, 0o755);
 
+  fs.copyFileSync("./parameters.ts", `${flyDir}/parameters.ts`);
   fs.copyFileSync("./passwdDb.ts", `${flyDir}/passwdDb.ts`);
 }
 

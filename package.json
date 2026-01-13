@@ -12,6 +12,7 @@
     "node": ">=21.0.0"
   },
   "dependencies": {
+    "commander": "^14.0.2",
     "dependency-solver": "^1.0.6",
     "dotenv": "^16.4.5",
     "enquirer": "^2.4.1",

@@ -8,7 +8,7 @@ defined in the `docker-compose.yml` file.
 
 ## Prerequisites
 
-- Node.js >= 21
+- Node.js >= 22
 - yarn
 - Fly.io CLI
 - Docker
@@ -65,6 +65,25 @@ fly/deploy-all.ts
 fly/destroy-all.ts
 ```
 (or `npx tsx fly/destroy-all.ts`)
+
+## Connection parameters
+You can get the connection parameters for your deployed supabase services by
+running the `parameters.ts` script in the generated `fly` directory. It will output parameters similarly to the `npx supabase status` command. You can choose between three output formats: plain text, JSON, and env file format.
+
+```termsh
+$ cd fly
+$ npx tsx parameters.ts -o json
+{
+  "ANON_KEY": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJyb2xlIjoiYW5vbiIsImlzcyI6InN1cGFiYXNlIiwiaWF0IjoxNzY4MzI2MzAxLCJleHAiOjE5MjYwMDYzMDF9.<redacted>",
+  "API_URL": "https://<prefix>-kong.fly.dev/",
+  "DB_URL": "postgresql://postgres:<redacted>@<prefix>-db.fly.dev:5432/postgres",
+  "GRAPHQL_URL": "https://<prefix>-kong.fly.dev/graphql/v1",
+  "JWT_SECRET": "<redacted>",
+  "MCP_URL": "https://<prefix>-kong.fly.dev/mcp",
+  "SERVICE_ROLE_KEY": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJyb2xlIjoic2VydmljZV9yb2xlIiwiaXNzIjoic3VwYWJhc2UiLCJpYXQiOjE3NjgzMjYzMDEsImV4cCI6MTkyNjAwNjMwMX0.<redacted>",
+  "STUDIO_URL": "https://<prefix>-kong.fly.dev/"
+}
+```
 
 ## Deploying Edge Functions
 
