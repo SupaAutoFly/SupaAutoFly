@@ -1138,10 +1138,14 @@ function generateDockerfile(
     fs.writeSync(fd, `CMD ${JSON.stringify(cmd)}\n`);
   }
   fs.closeSync(fd);
+  const volumeName =
+    process.env.FLY_LEGACY_VOLUME_NAMES === "true"
+      ? `${prefix}_${name}_data`
+      : "fly_data";
   mounts = [
     {
       destination: "/fly-data",
-      source: toVolumeName(`${prefix}_${name}_data`),
+      source: toVolumeName(volumeName),
       ...(metadata?.initialVolumeSize && {
         initial_size: metadata.initialVolumeSize,
       }),
