@@ -93,7 +93,7 @@ type ServiceMetadata = {
   suppressPorts?: string[];
   rawPorts?: string[];
   extraPorts?: string[];
-  ip?: "flycast";
+  ip?: "flycast" | "v6only";
   extraVolumes?: string[];
   extraDependsOn?: string[];
   skipVolumes?: string[];
@@ -110,8 +110,10 @@ type ServiceMetadata = {
   postprocess?: ((context: Context) => void)[];
   preprocess?: ((context: InputContext) => void)[];
   extraDeployment?: ((context: Context) => string)[];
+  extraDockerfile?: string;
   extraContainerSetup?: string;
   initialVolumeSize?: string;
+  cmd?: string[];
 };
 
 type Metadata = {
@@ -128,7 +130,9 @@ function makeMetadata(prefix: string): Metadata {
   return {
     db: {
       ha: false,
-      extraPorts: ["${POSTGRES_PORT}:${POSTGRES_PORT}"],
+      ip: "v6only",
+      // 80:80 for letsencrypt certbot adhoc server
+      extraPorts: ["${POSTGRES_PORT}:${POSTGRES_PORT}", "80:80"],
       rawPorts: ["${POSTGRES_PORT}"],
       env: {
         PAGER: "more",
@@ -140,6 +144,8 @@ function makeMetadata(prefix: string): Metadata {
         WALG_SSH_USERNAME: "${WALG_SSH_USERNAME}",
         WALG_COMPRESSION_METHOD: "${WALG_COMPRESSION_METHOD:-zstd}",
         WALG_LIBSODIUM_KEY_TRANSFORM: "${WALG_LIBSODIUM_KEY_TRANSFORM:-base64}",
+        PUBLIC_HOST: `${prefix}-db.fly.dev`,
+        DOMAIN_ADMIN_EMAIL: "${DOMAIN_ADMIN_EMAIL}",
       },
       secrets: {
         WALG_S3_ACCESS_KEY_ID: "${WALG_S3_ACCESS_KEY_ID}",
@@ -156,7 +162,9 @@ function makeMetadata(prefix: string): Metadata {
         "wal-g-logs:/var/log/wal-g",
       ],
       initialVolumeSize: process.env.POSTGRES_INITIAL_VOLUME_SIZE || "4GB",
+      preprocess: [stageDbCertbot],
       extraContainerSetup: dedent`
+          # WAL-G setup
           if [ -n "$WALG_SSH_PRIVATE_KEY" ]; then
             echo "Setting up SSH private key for WAL-G"
             mkdir -p ~postgres/.ssh
@@ -171,12 +179,35 @@ function makeMetadata(prefix: string): Metadata {
           bash /usr/local/bin/make-wal-g.conf.sh > /etc/postgresql-custom/wal-g.conf
           mkdir -p /var/log/wal-g
           chown postgres:postgres /var/log/wal-g
+
+          # hardening to accept only SSL from public network
+          sed -i -e '/scram-sha-256/s/host/hostssl/' /etc/postgresql/pg_hba.conf
+          # allow non-SSL on .internal address
+          echo "host  all  all  fdaa::0/16     scram-sha-256" >>/etc/postgresql/pg_hba.conf
+
           while [ -e /etc/maintenance_mode ]; do
             echo "Maintenance mode is enabled, deferring database startup"
             sleep 60
           done
+
           /usr/local/bin/setup-backup.sh "\$@"
+          /opt/certbot/daemon.sh &
           `,
+      extraDockerfile: dedent`
+          SHELL ["/bin/bash", "-c"]
+          RUN apt-get update && apt-get install -y --no-install-recommends python3.9-venv && rm -rf /var/cache/apt/archives /var/lib/apt/lists/*
+          RUN mkdir -p /opt/certbot
+          COPY certbot/ /opt/certbot/
+          RUN <<EOF
+            set -e
+            cd /opt/certbot
+            python3.9 -m venv .venv
+            source .venv/bin/activate
+            pip install -r requirements.txt
+          EOF
+          `,
+      // for more log detail:
+      // cmd: [ "postgres", "-c", "config_file=/etc/postgresql/postgresql.conf", "-c", "log_min_messages=info" ]
     },
     auth: {
       ha: true,
@@ -343,8 +374,8 @@ function makeMetadata(prefix: string): Metadata {
       },
       rawPorts: ["${POSTGRES_PORT}", "${POOLER_PROXY_PORT_TRANSACTION}"],
       env: {
-        "POSTGRES_HOST": "${POSTGRES_HOST}",
-        "SUPAVISOR_DB_IP_VERSION": "ipv6",
+        POSTGRES_HOST: "${POSTGRES_HOST}",
+        SUPAVISOR_DB_IP_VERSION: "ipv6",
       },
       postprocess: [postprocessSupavisorConfig],
     },
@@ -364,8 +395,8 @@ function makeMetadata(prefix: string): Metadata {
           "primary": {
             "endpoint": "${process.env.STORAGE_BACKUP_S3_ENDPOINT}",
             "path": "${process.env.STORAGE_BACKUP_S3_BUCKET}/${
-          process.env.STORAGE_BACKUP_S3_PATH || ""
-        }",
+              process.env.STORAGE_BACKUP_S3_PATH || ""
+            }",
             "forget": "${process.env.STORAGE_BACKUP_RETENTION}",
             "compression": "${process.env.STORAGE_BACKUP_COMPRESSION || "auto"}"
           }
@@ -467,7 +498,7 @@ if (process.env.STORAGE_BACKUP_S3_ENDPOINT) {
 function getDockerUserEntrypointAndCmd(image: string) {
   execSync(`docker pull ${image}`, { stdio: "inherit" });
   const dockerInspect = JSON.parse(
-    execSync(`docker inspect -f json ${image}`, { encoding: "utf8" })
+    execSync(`docker inspect -f json ${image}`, { encoding: "utf8" }),
   );
   const user = dockerInspect[0].Config.User || "root";
   const entrypoint = dockerInspect[0].Config.Entrypoint;
@@ -493,7 +524,7 @@ function addFile(
   context: Context,
   localPath: string,
   stagingPath: string,
-  containerPath: string
+  containerPath: string,
 ): void {
   if (!fs.statSync(localPath, { throwIfNoEntry: false })?.isFile()) {
     console.warn(`Skipping non-file / missing file ${localPath}`);
@@ -507,7 +538,7 @@ function addFile(
     fs.copyFileSync(localPath, fullStagingPath);
   } catch (error) {
     console.error(
-      `Failed to copy ${localPath} to ${fullStagingPath}: ${error.message}`
+      `Failed to copy ${localPath} to ${fullStagingPath}: ${error.message}`,
     );
     throw error;
   }
@@ -588,7 +619,7 @@ function makeFly(inputContext: {
   }
 
   const guessedSecrets = Object.keys(composeData.environment || {}).filter(
-    (key: string) => guessSecret(key)
+    (key: string) => guessSecret(key),
   );
 
   flyConfig.env = {
@@ -601,11 +632,11 @@ function makeFly(inputContext: {
         .filter(
           ([key, _]: [string, string]) =>
             !guessedSecrets.includes(key) &&
-            metadata?.secrets?.[key] === undefined
+            metadata?.secrets?.[key] === undefined,
         )
         .map(([variable, value]: [string, string]) => {
           return [variable, mapUnqualifiedUrl(expandEnvVars(value))];
-        })
+        }),
     ),
   };
   if (composeData.entrypoint) {
@@ -622,8 +653,8 @@ function makeFly(inputContext: {
     };
   }
 
-  if (composeData.command) {
-    let cmd = composeData.command;
+  if (metadata.cmd || composeData.command) {
+    let cmd = metadata.cmd || composeData.command;
     if (typeof cmd === "string") {
       cmd = splitShellString(cmd);
     }
@@ -635,6 +666,7 @@ function makeFly(inputContext: {
       cmd,
     };
   }
+
   flyConfig.services = (composeData.ports ?? [])
     .concat(metadata?.extraPorts ?? [])
     .map((portMapping: string) => {
@@ -707,7 +739,7 @@ function makeFly(inputContext: {
         context,
         dockerDir + volume.hostPath,
         volume.hostPath,
-        volume.containerPath
+        volume.containerPath,
       );
     });
   flyConfig.mounts = dockerVolumes
@@ -722,12 +754,12 @@ function makeFly(inputContext: {
     .map((volume: any) => {
       if (volume.mode === "z") {
         console.warn(
-          `Sharing of volumes between apps is currently not supported. Creating separate volumes for ${volume.hostPath}.`
+          `Sharing of volumes between apps is currently not supported. Creating separate volumes for ${volume.hostPath}.`,
         );
       }
 
       const volumeName = toVolumeName(
-        `${prefix}_${volume.hostPath.replace(/^.\/volumes\//, "")}`
+        `${prefix}_${volume.hostPath.replace(/^.\/volumes\//, "")}`,
       );
 
       if (
@@ -745,7 +777,7 @@ function makeFly(inputContext: {
             context,
             `${dockerDir + volume.hostPath}/${entry}`,
             `${volume.hostPath}/${entry}`,
-            `${volume.containerPath}/${entry}`
+            `${volume.containerPath}/${entry}`,
           );
         });
       }
@@ -773,7 +805,7 @@ function makeFly(inputContext: {
       fs.mkdirSync(buildDir, { recursive: true });
       execSync(
         `git clone ${gitConfig} --depth 1 -b ${branch} ${repo} ${buildDir}`,
-        { stdio: "inherit" }
+        { stdio: "inherit" },
       );
       execSync(`docker build -t ${metadata.image} ${buildDir}`, {
         stdio: "inherit",
@@ -787,12 +819,18 @@ function makeFly(inputContext: {
   let needCustomImage = false;
   if (flyConfig.mounts.length > 0) {
     console.warn(
-      `Volume mounts detected for '${name}'. Creating custom image.`
+      `Volume mounts detected for '${name}'. Creating custom image.`,
     );
     needCustomImage = true;
   }
   if (metadata?.extraContainerSetup) {
     console.warn(`Extra setup detected for '${name}'. Creating custom image.`);
+    needCustomImage = true;
+  }
+  if (metadata?.extraDockerfile) {
+    console.warn(
+      `Extra Dockerfile commands for '${name}'. Creating custom image.`,
+    );
     needCustomImage = true;
   }
   if (needCustomImage && "image" in flyConfig.build /* for TS, always true */) {
@@ -804,13 +842,13 @@ function makeFly(inputContext: {
       flyConfig.mounts,
       prefix,
       name,
-      metadata
+      metadata,
     );
 
     const mountsProcesses = Object.entries(metadata.processes ?? {})
       .filter(
         ([_, processMeta], index) =>
-          index === 0 || (processMeta.needsVolume ?? false)
+          index === 0 || (processMeta.needsVolume ?? false),
       )
       .map(([processName, _]) => processName);
 
@@ -849,7 +887,7 @@ function makeFly(inputContext: {
       secretsTs,
       dedent`#!/bin/env -S npx tsx
       import { execSync } from "node:child_process";
-      \n`
+      \n`,
     );
     const expandedSecrets: string[] = [];
     for (const secretName in secrets) {
@@ -857,7 +895,7 @@ function makeFly(inputContext: {
       if (secretValue === true)
         secretValue = composeData.environment[secretName];
       const secretValueExpanded = quoteMultilineSecret(
-        mapUnqualifiedUrl(expandEnvVars(secretValue))
+        mapUnqualifiedUrl(expandEnvVars(secretValue)),
       );
       expandedSecrets.push(`${secretName}=${secretValueExpanded}`);
     }
@@ -867,14 +905,17 @@ function makeFly(inputContext: {
         input: ${JSON.stringify(expandedSecrets.join("\n"))},
         stdio: ["pipe", "inherit", "inherit"],
       });
-      `
+      `,
     );
     fs.chmodSync(`${dir}/secrets.ts`, 0o755);
   }
 
   if (metadata?.processes) {
     flyConfig.processes = Object.fromEntries(
-      Object.entries(metadata.processes).map(([name, proc]) => [name, proc.cmd])
+      Object.entries(metadata.processes).map(([name, proc]) => [
+        name,
+        proc.cmd,
+      ]),
     );
   }
 
@@ -967,13 +1008,17 @@ function makeFly(inputContext: {
               \n
             `;
           if (flyConfig.services.length > 0)
-            return dedent`\n
+            return (
+              dedent`\n
               if (!execSync("fly ips list", {
                 stdio: ['inherit', 'pipe', 'inherit'],
                 encoding: "utf8"
               }).includes("v6")) {
                 execSync("fly ips allocate-v6", { stdio: "inherit" });
-              }
+              }` +
+              (metadata?.ip === "v6only"
+                ? ""
+                : dedent`\n
               if (!execSync("fly ips list", {
                 stdio: ['inherit', 'pipe', 'inherit'],
                 encoding: "utf8"
@@ -981,7 +1026,8 @@ function makeFly(inputContext: {
                 execSync("fly ips allocate-v4 --shared", { stdio: "inherit" });
               }
               \n
-            `;
+            `)
+            );
           return "";
         })()}
         ${(metadata?.extraDeployment ?? [])
@@ -989,7 +1035,7 @@ function makeFly(inputContext: {
             return extraDeployment(context);
           })
           .join("\n")}
-        \n`
+        \n`,
   );
   fs.chmodSync(`${dir}/deploy.ts`, 0o755);
 
@@ -1004,7 +1050,7 @@ function generateDockerfile(
   mounts: any,
   prefix: string,
   name: string,
-  metadata: any
+  metadata: any,
 ) {
   const {
     user,
@@ -1053,16 +1099,16 @@ function generateDockerfile(
         fi
       }
       \n
-      `
+      `,
   );
   mounts.forEach((mount: any) => {
     fs.writeSync(
       fd,
       dedent`
         setup_mount ${mount.source} ${mount.destination} ${path.dirname(
-        mount.destination
-      )}\n
-        `
+          mount.destination,
+        )}\n
+        `,
     );
   });
 
@@ -1072,7 +1118,7 @@ function generateDockerfile(
   if (user !== "root") {
     fs.writeSync(
       fd,
-      `exec su \\$(id -u -n ${user}) /usr/local/bin/fly-user-entrypoint.sh "$@"\n`
+      `exec su \\$(id -u -n ${user}) /usr/local/bin/fly-user-entrypoint.sh "$@"\n`,
     );
   } else {
     fs.writeSync(fd, `exec /usr/local/bin/fly-user-entrypoint.sh "$@"\n`);
@@ -1081,12 +1127,12 @@ function generateDockerfile(
     fd,
     dedent`
         EOF
-
+        ${(metadata?.extraDockerfile && "\n" + metadata?.extraDockerfile + "\n") || ""}
         # only for local development, ignored by fly.io
         VOLUME [ "/fly-data" ]
 
         ENTRYPOINT ["fly-entrypoint.sh"]\n
-        `
+        `,
   );
   if (cmd) {
     fs.writeSync(fd, `CMD ${JSON.stringify(cmd)}\n`);
@@ -1133,10 +1179,15 @@ function postprocessSupavisorConfig(context: { prefix: string; dir: string }) {
   });
 }
 
+function stageDbCertbot(inputContext: InputContext) {
+  const { dir } = inputContext;
+  fs.cpSync("./data/db/certbot", `${dir}/certbot`, { recursive: true });
+}
+
 function makeFlyLogShipperConfig() {
   const vectorYaml = fs.readFileSync(
     "./supabase/docker/volumes/logs/vector.yml",
-    "utf8"
+    "utf8",
   );
   const vectorData = parse(vectorYaml);
 
@@ -1144,15 +1195,15 @@ function makeFlyLogShipperConfig() {
   transforms.project_logs.inputs = ["log_json"];
   transforms.project_logs.source = transforms.project_logs.source.replace(
     ".container_name",
-    ".fly.app.name"
+    ".fly.app.name",
   );
   transforms.router.route = Object.fromEntries(
     Object.entries<string>(transforms.router.route).map(
       ([key, value]: [string, string]) => [
         key,
         value.replace("supabase", "${SUPABASE_PREFIX}"),
-      ]
-    )
+      ],
+    ),
   );
   const sinks = Object.fromEntries(
     Object.entries(vectorData.sinks).map(
@@ -1168,8 +1219,8 @@ function makeFlyLogShipperConfig() {
             .replace(/.*\/api\/logs/, "${SUPABASE_LOGFLARE_URL}")
             .replace(/&api_key=.*$/, ""),
         },
-      ]
-    )
+      ],
+    ),
   );
   transforms.rest_logs.source = dedent`
         parsed, err = parse_regex(.event_message, r'\[(?P<time>.*)\] (?P<msg>.*)$')
@@ -1182,7 +1233,7 @@ function makeFlyLogShipperConfig() {
   // see https://github.com/supabase/supabase/pull/41800
   transforms.db_logs.source = transforms.db_logs.source.replace(
     "if parsed != null {",
-    "if parsed.level != null {"
+    "if parsed.level != null {",
   );
   const flyLogShipperConfig = {
     transforms,
@@ -1194,7 +1245,7 @@ function makeFlyLogShipperConfig() {
   // escape backslashes for fly-log-shipper's variable expansion transformation
   fs.writeFileSync(
     "./supabase/docker/volumes/fly-log-shipper/supabase.toml",
-    stringify(flyLogShipperConfig).replaceAll("\\", "\\\\") + "\n"
+    stringify(flyLogShipperConfig).replaceAll("\\", "\\\\") + "\n",
   );
 }
 
@@ -1223,7 +1274,7 @@ function installDeployFunctions(context: {
 
 async function installEdgeFunctionSecrets(
   functionDir: string,
-  metadata: Metadata
+  metadata: Metadata,
 ) {
   const secretsFile = `${functionDir}/.env`;
   if (!fs.existsSync(secretsFile)) return;
@@ -1241,13 +1292,13 @@ function installEdgeFunctions(context: Context) {
 
   fs.writeFileSync(
     `${dir}/.env`,
-    `FUNCTIONS_DIR=${process.env.FUNCTIONS_DIR}\n`
+    `FUNCTIONS_DIR=${process.env.FUNCTIONS_DIR}\n`,
   );
 
   const functionsDir = path.resolve(process.env.FUNCTIONS_DIR);
   if (!fs.existsSync(functionsDir)) {
     console.error(
-      `Functions directory ${functionsDir} does not exist. Skipping.`
+      `Functions directory ${functionsDir} does not exist. Skipping.`,
     );
     return;
   }
@@ -1260,7 +1311,7 @@ function installEdgeFunctions(context: Context) {
       context,
       `${functionsDir}/${entry}`,
       `./volumes/functions/${entry}`,
-      `/home/deno/functions/${entry}`
+      `/home/deno/functions/${entry}`,
     );
   });
 
@@ -1269,7 +1320,7 @@ function installEdgeFunctions(context: Context) {
 
 function makeDependencyGraph(
   composeData: any,
-  metadata: Metadata
+  metadata: Metadata,
 ): { [key: string]: string[] } {
   const graph: { [key: string]: string[] } = {};
 
@@ -1287,7 +1338,7 @@ function makeDependencyGraph(
       dependencies.push(...metadata[serviceName].extraDependsOn);
     }
     graph[serviceName] = dependencies.map(
-      (dependency: string) => substitutedServices[dependency] ?? dependency
+      (dependency: string) => substitutedServices[dependency] ?? dependency,
     );
   }
   return graph;
@@ -1302,7 +1353,7 @@ function clone() {
     `git clone ${gitConfig} --filter=blob:none --no-checkout ${baseRepo} supabase`,
     {
       stdio: "inherit",
-    }
+    },
   );
   execSync(`git sparse-checkout set --cone docker`, {
     stdio: "inherit",
@@ -1320,7 +1371,7 @@ function checkJwt() {
     verify(process.env.SERVICE_ROLE_KEY ?? "", process.env.JWT_SECRET);
   } catch (error) {
     console.log(
-      "JWT_SECRET does not match ANON_KEY or SERVICE_ROLE_KEY: regenerating keys."
+      "JWT_SECRET does not match ANON_KEY or SERVICE_ROLE_KEY: regenerating keys.",
     );
     const now = Math.floor(Date.now() / 1000);
     const fiveYears = 5 * 365 * 24 * 60 * 60;
@@ -1331,7 +1382,7 @@ function checkJwt() {
         iat: now,
         exp: now + fiveYears,
       },
-      process.env.JWT_SECRET
+      process.env.JWT_SECRET,
     );
     process.env.SERVICE_ROLE_KEY = sign(
       {
@@ -1340,7 +1391,7 @@ function checkJwt() {
         iat: now,
         exp: now + fiveYears,
       },
-      process.env.JWT_SECRET
+      process.env.JWT_SECRET,
     );
     replaceInFileSync({
       files: "./.env",
@@ -1365,8 +1416,8 @@ function checkLogShipperAccessKey() {
     const token = JSON.parse(
       execSync(
         `flyctl tokens create readonly -j -n "Log shipper for supabase" ${org}`,
-        { encoding: "utf8" }
-      )
+        { encoding: "utf8" },
+      ),
     );
     process.env.FLY_LOG_SHIPPER_ACCESS_KEY = token.token;
     replaceInFileSync({
@@ -1392,7 +1443,7 @@ function fixupComposeData(composeData: any) {
         service.environment.map((entry: string) => {
           const [key, value] = entry.split("=");
           return [key, value];
-        })
+        }),
       );
     }
   }
@@ -1403,14 +1454,14 @@ async function main() {
 
   if (!fs.existsSync("./.env")) {
     console.log(
-      "Please create a .env file with the required environment variables (see .env.example)."
+      "Please create a .env file with the required environment variables (see .env.example).",
     );
     process.exit(1);
   }
 
   const composeYaml = fs.readFileSync(
     "./supabase/docker/docker-compose.yml",
-    "utf8"
+    "utf8",
   );
   const composeData = parse(composeYaml);
   fixupComposeData(composeData);
@@ -1419,7 +1470,7 @@ async function main() {
     process.env.FLY_PREFIX || String(composeData.name) || "supabase";
   if (prefix.match(/[^a-z0-9-]/)) {
     throw new Error(
-      "Invalid prefix. Only lowercase letters, numbers, and hyphens are allowed."
+      "Invalid prefix. Only lowercase letters, numbers, and hyphens are allowed.",
     );
   }
 
@@ -1466,7 +1517,7 @@ async function main() {
         import { execSync } from 'child_process';
 
         process.chdir(__dirname);
-        \n`
+        \n`,
   );
   appOrder.forEach((serviceName: string) => {
     fs.writeSync(
@@ -1477,7 +1528,7 @@ async function main() {
               stdio: "inherit",
               cwd: "${serviceName}"
             });
-            \n`
+            \n`,
     );
   });
   fs.writeSync(
@@ -1487,7 +1538,7 @@ async function main() {
         >>> All apps deployed!
         Find your supabase studio at: https://${prefix}-kong.fly.dev
         \`);
-        \n`
+        \n`,
   );
   fs.closeSync(deployAllTs);
   fs.chmodSync(`${flyDir}/deploy-all.ts`, 0o755);
@@ -1517,7 +1568,7 @@ async function main() {
           if (prefix !== "${prefix}") {
               process.exit(0);
           }
-        `
+        `,
   );
   appOrder.reverse().forEach((serviceName: string) => {
     fs.writeSync(
@@ -1528,7 +1579,7 @@ async function main() {
             spawnSync("fly", ["apps", "destroy", "${prefix}-${serviceName}", "--yes"], {
               stdio: "inherit",
             });
-          \n`
+          \n`,
     );
   });
   fs.writeSync(
@@ -1541,7 +1592,7 @@ async function main() {
       console.error(\`Aborted\${errMsg ? \` (\${errMsg})\` : ''}.\`);
       process.exit(1);
     });
-    `
+    `,
   );
   fs.closeSync(destroyAllTs);
   fs.chmodSync(`${flyDir}/destroy-all.ts`, 0o755);
