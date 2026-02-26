@@ -32,10 +32,10 @@ yarn
 ## Configuration
 
 The supabase deployment is configured by environment variables in a `.env` file.
-Start with the [`.env.example`](.env.example) file as reference:
+Start with the [`example.env`](example.env) file as reference:
 
 ```sh
-cp .env.example .env
+cp example.env .env
 ```
 
 _Make sure to set up secure secrets._
