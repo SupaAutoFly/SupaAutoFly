@@ -199,11 +199,16 @@ function makeMetadata(prefix: string): Metadata {
           RUN mkdir -p /opt/certbot
           COPY certbot/ /opt/certbot/
           RUN <<EOF
-            set -e
-            cd /opt/certbot
-            python3.9 -m venv .venv
-            source .venv/bin/activate
-            pip install -r requirements.txt
+          set -e
+          cd /opt/certbot
+          python3.9 -m venv .venv
+          source .venv/bin/activate
+          pip install -r requirements.txt
+          EOF
+          COPY <<'EOF' /etc/sysctl.d/20-tcp-keepalive.conf
+          net.ipv4.tcp_keepalive_time = 60
+          net.ipv4.tcp_keepalive_intvl = 10
+          net.ipv4.tcp_keepalive_probes = 6
           EOF
           `,
       // for more log detail:
