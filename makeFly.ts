@@ -343,22 +343,22 @@ function makeMetadata(prefix: string): Metadata {
       ha: false,
       extraContainerSetup: dedent`
         function setup_credentials() {
-            while ! mc alias set local http://localhost:9000 \\\${MINIO_ROOT_USER} \\\${MINIO_ROOT_PASSWORD} &>/dev/null; do
+            while ! mc alias set local http://localhost:9000 \${MINIO_ROOT_USER} \${MINIO_ROOT_PASSWORD} &>/dev/null; do
                 sleep 1
             done
             echo Succeeded setting up Minio alias >&2
-            mc admin user add local \\\${STORAGE_AWS_ACCESS_KEY_ID} \\\${STORAGE_AWS_SECRET_ACCESS_KEY}
-            mc admin policy attach local readwrite --user \\\${STORAGE_AWS_ACCESS_KEY_ID}
+            mc admin user add local \${STORAGE_AWS_ACCESS_KEY_ID} \${STORAGE_AWS_SECRET_ACCESS_KEY}
+            mc admin policy attach local readwrite --user \${STORAGE_AWS_ACCESS_KEY_ID}
             mc mb local/${prefix}-storage
         }
 
         setup_credentials &
 
-        args=("\\\$@")
-        if [ "\\\${args[1]}" = "/minio-data" ]; then
-            args[1]="\\\$(realpath /minio-data)"
+        args=("$@")
+        if [ "\${args[1]}" = "/minio-data" ]; then
+            args[1]="$(realpath /minio-data)"
         fi
-        set -- "\\\${args[@]}"\n
+        set -- "\${args[@]}"\n
         `,
     },
     "fly-log-shipper": {
