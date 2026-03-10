@@ -15,7 +15,7 @@ import { sign, verify } from "jsonwebtoken";
 import { expandEnvVars } from "./expandEnvVars";
 
 const baseRepo = "https://github.com/supabase/supabase.git";
-const baseBranch = "1.25.12";
+const baseBranch = "v1.26.03";
 
 const gitConfig = "-c advice.detachedHead=false -c core.autocrlf=input";
 
@@ -247,7 +247,7 @@ function makeMetadata(prefix: string): Metadata {
       ha: false,
       buildFromRepo: {
         repo: "https://github.com/tvogel/logflare.git",
-        branch: "v1.26.13-tv-1",
+        branch: "v1.31.2-tv-1",
       },
       vm: {
         memory: "2GB",
@@ -276,6 +276,8 @@ function makeMetadata(prefix: string): Metadata {
       ha: false,
       env: {
         SERVER_HOST: "fly-local-6pn",
+        GLOBAL_S3_BUCKET: "${STORAGE_GLOBAL_S3_BUCKET}",
+        REGION: "${STORAGE_REGION}",
         STORAGE_BACKEND: "s3",
         STORAGE_S3_BUCKET: storageS3Bucket,
         STORAGE_S3_MAX_SOCKETS: 200,
