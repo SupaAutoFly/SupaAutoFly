@@ -1267,6 +1267,7 @@ function makeRealtimeTenantSetup(context: {
 }) {
   const { prefix, name, dir } = context;
   fs.copyFileSync("./.env", `${dir}/.env`);
+  fs.copyFileSync("./deployCommon.ts", `${dir}/deployCommon.ts`);
   fs.copyFileSync("./makeRealtimeTenant.ts", `${dir}/makeRealtimeTenant.ts`);
   return dedent`
     execSync("npx tsx makeRealtimeTenant.ts ${prefix}-${name}", { stdio: "inherit" });
@@ -1279,6 +1280,7 @@ function installDeployFunctions(context: {
   dir: string;
 }) {
   const { prefix, name, dir } = context;
+  fs.copyFileSync("./deployCommon.ts", `${dir}/deployCommon.ts`);
   fs.copyFileSync("./deployFunctions.ts", `${dir}/deployFunctions.ts`);
   return "";
 }

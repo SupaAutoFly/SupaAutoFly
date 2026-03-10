@@ -5,9 +5,12 @@ import * as fs from "node:fs";
 import * as tar from "tar";
 import * as dotenv from "dotenv";
 import "dotenv/config";
+import { startOneMachineIfMissing } from "./deployCommon";
 
 async function deploy(functionDir: string) {
   console.log(`Deploying functions from directory: ${functionDir}`);
+
+  await startOneMachineIfMissing();
 
   const remoteTar = spawn(
     'fly ssh console -C "tar xzvf - -C /home/deno/functions"',

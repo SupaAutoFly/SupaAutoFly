@@ -1,16 +1,17 @@
 #!/bin/env -S npx tsx
 
-import {sign} from 'jsonwebtoken';
-import { execFileSync } from 'child_process';
+import { sign } from "jsonwebtoken";
+import { execFileSync } from "child_process";
 import "dotenv/config";
+import { startOneMachineIfMissing } from "./deployCommon";
 
-const url = 'http://localhost:4000/api/tenants';
+const url = "http://localhost:4000/api/tenants";
 const claims = {
-  iss: '',
+  iss: "",
   iat: Math.floor(Date.now() / 1000),
-  exp: Math.floor(Date.now() / 1000) + (60 * 60 * 24), // 24 hours expiration
-  aud: '',
-  sub: ''
+  exp: Math.floor(Date.now() / 1000) + 60 * 60 * 24, // 24 hours expiration
+  aud: "",
+  sub: "",
 };
 const token = sign(claims, process.env.JWT_SECRET);
 
@@ -26,16 +27,35 @@ function singleQuote(str: string) {
   return `'${str.replace(/'/g, "'\\''")}'`;
 }
 
-function runFly(cmd: string) {
-  execFileSync('fly', ['ssh', 'console', '-C', `/bin/sh -c ${singleQuote(cmd)}`], { stdio: 'inherit' });
+function sleep(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function runFly(cmd: string, maxRetries = 3) {
+  await startOneMachineIfMissing();
+
+  let retries = maxRetries;
+  while (retries) {
+    try {
+      execFileSync(
+        "fly",
+        ["ssh", "console", "-C", `/bin/sh -c ${singleQuote(cmd)}`],
+        { stdio: "inherit" },
+      );
+      return;
+    } catch (e) {
+      if (!--retries) throw e;
+      console.warn(`Error running command on fly machine, retrying: ${cmd}`);
+    }
+  }
 }
 
 async function main() {
   const tenantName = process.argv[2];
   if (!tenantName) {
-    throw new Error('Usage: realtime_tenant.ts <tenant-name>');
+    throw new Error("Usage: realtime_tenant.ts <tenant-name>");
   }
-  const prefix = tenantName.slice(0, tenantName.indexOf('-realtime'));
+  const prefix = tenantName.slice(0, tenantName.indexOf("-realtime"));
 
   const data = {
     tenant: {
@@ -44,29 +64,31 @@ async function main() {
       jwt_secret: process.env.JWT_SECRET,
       extensions: [
         {
-          type: 'postgres_cdc_rls',
+          type: "postgres_cdc_rls",
           settings: {
             db_name: process.env.POSTGRES_DB,
             db_host: `${prefix}-db.internal`,
-            db_user: 'supabase_admin',
+            db_user: "supabase_admin",
             db_password: process.env.POSTGRES_PASSWORD,
             db_port: process.env.POSTGRES_PORT,
-            region: 'us-west-1',
+            region: "us-west-1",
             ssl_enforced: false,
             poll_interval_ms: 100,
-            poll_max_record_bytes: 1048576
-          }
-        }
-      ]
-    }
+            poll_max_record_bytes: 1048576,
+          },
+        },
+      ],
+    },
   };
 
-  runFly(`${deleteTenant({tenant: {name: 'realtime-dev'}})}; ${deleteTenant(data)}; ${createTenant(data)}`);
+  await runFly(
+    `${deleteTenant({ tenant: { name: "realtime-dev" } })}; ${deleteTenant(data)}; ${createTenant(data)}`,
+  );
 }
 
 main()
-    .then(() => process.exit(0))
-    .catch((error) => {
-        console.error(`Failed.\n${error.stack}`);
-        process.exit(1);
-    });
+  .then(() => process.exit(0))
+  .catch((error) => {
+    console.error(`Failed.\n${error.stack}`);
+    process.exit(1);
+  });
