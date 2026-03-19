@@ -26,6 +26,7 @@ async function deploy(functionDir: string) {
         gzip: true,
         cwd: functionDir,
         filter: (path) => path !== ".env",
+        follow: true,
       },
       fs.readdirSync(functionDir)
     )
