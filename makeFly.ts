@@ -136,12 +136,12 @@ function makeMetadata(prefix: string): Metadata {
       rawPorts: ["${POSTGRES_PORT}"],
       env: {
         PAGER: "more",
-        WALG_S3_PREFIX: "${WALG_S3_PREFIX}",
-        WALG_S3_REGION: "${WALG_S3_REGION}",
-        WALG_S3_ENDPOINT: "${WALG_S3_ENDPOINT}",
-        WALG_SSH_PREFIX: "${WALG_SSH_PREFIX}",
+        WALG_S3_PREFIX: "${WALG_S3_PREFIX-}",
+        WALG_S3_REGION: "${WALG_S3_REGION-}",
+        WALG_S3_ENDPOINT: "${WALG_S3_ENDPOINT-}",
+        WALG_SSH_PREFIX: "${WALG_SSH_PREFIX-}",
         WALG_SSH_PORT: "${WALG_SSH_PORT:-22}",
-        WALG_SSH_USERNAME: "${WALG_SSH_USERNAME}",
+        WALG_SSH_USERNAME: "${WALG_SSH_USERNAME-}",
         WALG_COMPRESSION_METHOD: "${WALG_COMPRESSION_METHOD:-zstd}",
         WALG_LIBSODIUM_KEY_TRANSFORM: "${WALG_LIBSODIUM_KEY_TRANSFORM:-base64}",
         PUBLIC_HOST: `${prefix}-db.fly.dev`,
@@ -150,7 +150,7 @@ function makeMetadata(prefix: string): Metadata {
       secrets: {
         WALG_S3_ACCESS_KEY_ID: "${WALG_S3_ACCESS_KEY_ID}",
         WALG_S3_SECRET_ACCESS_KEY: "${WALG_S3_SECRET_ACCESS_KEY}",
-        WALG_SSH_PRIVATE_KEY: "${WALG_SSH_PRIVATE_KEY}",
+        WALG_SSH_PRIVATE_KEY: "${WALG_SSH_PRIVATE_KEY-}",
         WALG_LIBSODIUM_KEY: "${WALG_LIBSODIUM_KEY}",
       },
       extraVolumes: [
