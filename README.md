@@ -131,6 +131,22 @@ _Important:_ You will need to copy the new `.env` file to the SupaAutoFly root
 directory and run `./makeFly.ts` and `./fly/deploy-all.ts` again to update all
 dependent services with the new password as well!
 
+## Saving the `pgsodium` root-key for supabase vault
+If you use supabase vault, you should save and store the `pgsodium` root-key in
+a safe place. Otherwise, you will not be able to use vault secrets after
+restoring your database from backup (see next section).
+
+The root-key is automatically generated and then stored at
+`/etc/postgresql-custom/pgsodium_root.key`. Use
+
+```sh
+$ cd fly/db
+$ fly sftp get /etc/postgresql-custom/pgsodium_root.key
+```
+
+to retrieve and store the file locally. Add it to a password-safe or similar
+trusted storage.
+
 ## Postgres Backups with Point-in-Time Recovery (PITR)
 
 ### WAL-G Backup Configuration
