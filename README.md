@@ -214,6 +214,25 @@ guest_path = "/etc/maintenance_mode"
 13. Remove the maintenance mode `[[files]]` section from `fly.toml`
 14. `./deploy.ts` again to restart the app without maintenance mode.
 
+### Restore `pgsodium` root key for supabase vault
+
+Without the root-key used by the backed up database, you won't be able to use
+the vault data. If you switch to a new deployment and use restore to migrate
+data from old to new deployment, you will need to restore the vault root-key.
+
+If you restore into the original deployment, this step is not required because
+the correct root-key is (should be) still there.
+
+The vault root-key must be saved and stored separately from the WAL-G backup
+(see above). To restore it, use:
+
+```sh
+$ cd fly/db
+$ fly ssh console -C "rm /etc/postgresql-custom/pgsodium_root.key"
+$ fly sftp put pgsodium_root.key /etc/postgresql-custom/pgsodium_root.key
+```
+
+
 ## Storage Backups (S3 → S3)
 
 If you use supabase storage, you should also back up the storage data. As
